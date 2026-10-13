@@ -1,0 +1,136 @@
+---
+title: "NYPD_Assignment"
+author: "JAG"
+date: "2026-09-21"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Introduction
+The goal of this project is to analysis the seasonal victim counts throughout the 5 Boroughs of New York City. The 3 main questions I wish to analysis are as follows.
+  1. Do victim counts vary by by season throughout the Boroughs?
+  2. If they do, is it a consistent trend in all the Boroughs? And all Years?
+  3. Could we potentially use the data to predict the Victim count through the years?
+
+```{r import and clean}
+#import the shooting data
+shooting.data = read.csv( "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+
+#view the data
+glimpse(shooting.data)
+head(shooting.data)
+
+#check if there are any missing values
+shooting.data %>%
+  summarise(across(everything(), ~ sum(is.na(.))))
+
+#cleaning data
+shooting.clean = shooting.data %>%
+  select(OCCUR_DATE,BORO) %>%
+  rename(Date = OCCUR_DATE, Borough = BORO) %>%
+  mutate(Date = mdy(Date)) %>%
+  arrange(Date, desc(Date))
+
+glimpse(shooting.clean)
+
+
+shooting.clean = shooting.clean %>%
+  mutate(month = month(Date),
+         year = year(Date))
+
+
+```
+
+
+```{r total seasonal analysis}
+
+#make season column in table
+shooting.season = shooting.clean %>%
+  mutate(Season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall")
+      )
+
+glimpse(shooting.season)
+
+#count how many shooting Victims per season and Borough
+shooting.final = shooting.season %>%
+  group_by(Borough, Season) %>%
+  summarize(vic.count = n())
+
+#make a table that is easier to read
+shooting.wide = shooting.final %>%
+  pivot_wider(names_from = Season, values_from = vic.count)
+
+tibble(shooting.wide)
+
+#making data visual that demonstrates shooting count per season and Borough
+ggplot(data = shooting.final, aes(x = Borough, y = vic.count, fill = Season)) +
+  geom_col(position = "dodge") +
+  labs(x = "Borough", y = "Shooting Victim Count", title = " Seasonal Shooting Victim Count")
+  
+```
+
+## Data Visualization Plot #1
+My initial graph is a simple bar graph that shows a overall trend of the number of shooting victims per Borough and season. At a quick glance my first question seems to be answered. There is a definite variation between season with Summer being the season with most Victims across all Boroughs.
+
+
+```{r yearly seasonal analysis}
+#take into account the year data increase
+yearly.data = shooting.season %>%
+  group_by(Borough, Season, year) %>%
+  summarize(vic.count = n())
+
+yearly.data
+
+#plot the trend of shootings for each borough throughout the seasons and years
+ggplot(yearly.data, aes(x = year, y = vic.count, color = Season)) +
+  geom_line() +
+  facet_wrap(~ Borough) +
+  labs(title = "Seasonal Shooting Trends Across NYC Boroughs", x = "Year", y = "Number of Shooting Victims", color = "Season")
+```
+
+## Data Visualization Plot #2
+This graph visualizes the victim count data throughout the years. Viewing it we do see that there is still a trend of summer having the most shooting victims. However, now we are able to see a couple of different years were this is not the case throughout all the Boroughs. We also see that 2020 seem to have a dramatic jump in shooting victims throughout the Boroughs, but especially in Brooklyn.
+
+```{r prediction model}
+
+#make a linear regression model to determine statistical significance of each predictor interacting with one anoterh
+mod.shooting = lm(vic.count ~ year * Season * Borough, data = yearly.data)
+
+summary(mod.shooting)
+
+#use data to predict trend
+yearly.data$predicted = predict(mod.shooting)
+
+head(yearly.data)
+
+yearly.data %>%
+  ggplot(aes(x = predicted, y = vic.count, fill = Borough)) +
+  geom_point(shape = 21, size = 2) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs Predicted Shooting Victim Counts", x = "Predicted", y = "Actual")
+
+```
+
+## Data Visualization – Model
+
+This graph compares the actual shooting victim counts with the values predicted by the linear regression model. Points closer to the red line indicate a better fit, while points farther away represent larger prediction errors. From this graph, we can see that Staten Island has less variation in its shooting victim counts, while Brooklyn and the Bronx show greater variation.
+
+## Bias Identification
+
+One personal bias in this data project is that I chose this specific topic to avoid other topics involving race. I made this decision because I feel that those topics are more nuanced than what can be fully accounted for through data collection alone.
+
+Another potential source of bias is that the data does not account for borough population sizes or tourism. These factors could influence shooting victim counts and make direct comparisons between boroughs misleading.
+
+Other potential biases include inaccuracies in data collection and differences in how shootings are reported or recorded. Because of these limitations, the results should not be interpreted as evidence of a causal relationship, but rather as associations between the variables.
