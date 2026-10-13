@@ -12,3 +12,4 @@ This project analyzes historical NYPD shooting incident data to identify pattern
 2. Open it in RStudio.
 3. Install the required R packages.
 4. Click Knit to reproduce the analysis.
+5. Download the mp4 as well, it will not show a raw/preview
