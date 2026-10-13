@@ -1,0 +1,335 @@
+---
+title: "Covid Final Project"
+author: "J. Avalos-Gracia"
+date: "2026-10-10"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(countrycode)
+library(tidyverse)
+library(lubridate)
+
+```
+
+## Introduction
+
+For this project, I used the COVID19 data from the Johns Hopkins University dataset to analyze reported cases and deaths across continents. The United States and global datasets were combined to create a more comprehensive view of the pandemic. The data was then cleaned and organized to examine weekly and annual trends.
+
+The main questions I wanted to explore were:
+
+Which continents experienced the highest numbers of reported COVID-19 cases and deaths?
+
+Can the number of new COVID19 cases be used to predict the number of new deaths?
+
+To answer these questions, I created visualizations comparing reported cases and deaths across continents and years. I also developed a multiple linear regression model to examine the relationship between new cases and deaths while accounting for differences across continents and years.
+
+```{r import data}
+
+# Import Data
+url.in = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+# Name Files
+file.name = c("time_series_covid19_confirmed_US.csv",
+              "time_series_covid19_confirmed_global.csv",
+              "time_series_covid19_deaths_US.csv",
+              "time_series_covid19_deaths_global.csv")
+
+urls = str_c(url.in, file.name)
+
+urls
+
+# Direct Names to specific files
+us.cases.data = read.csv(urls[1])
+
+global.cases.data = read.csv(urls[2])
+                        
+global.deaths.data = read.csv(urls[4])
+
+us.deaths.data = read.csv(urls[3])
+
+
+```
+
+```{r clean data and combine both deaths and cases}
+
+# Clean global cases
+global.cases = global.cases.data %>%
+  pivot_longer(
+    cols = -c(Province.State, Country.Region, Lat, Long),
+    names_to = "Date",
+    values_to = "Cases") %>%
+  select(Province.State, Country.Region, Date, Cases)
+
+# Clean global deaths
+global.deaths = global.deaths.data %>%
+  pivot_longer(
+    cols = -c(Province.State, Country.Region, Lat, Long),
+    names_to = "Date",
+    values_to = "Deaths") %>%
+  select(Province.State, Country.Region, Date, Deaths)
+
+# Combine global datasets
+global = global.cases %>%
+  full_join(global.deaths, by = c("Province.State", "Country.Region", "Date")) %>%
+  mutate(Date = mdy(sub("^X", "", Date)))
+         
+summary(global)
+
+# Clean US cases
+us.cases = us.cases.data %>%
+  pivot_longer(
+    cols = -(UID:Combined_Key),
+    names_to = "Date",
+    values_to = "Cases") %>%
+  select(UID:Country_Region, Combined_Key, Date, Cases)
+
+head(us.cases)
+
+# Clean US deaths
+us.deaths = us.deaths.data %>%
+  pivot_longer(
+    cols = -(UID:Population),
+    names_to = "Date",
+    values_to = "Deaths") %>%
+  select(UID:Country_Region, Combined_Key, Population, Date, Deaths)
+
+head(us.deaths)
+
+# Combine US data
+us.data = us.deaths %>%
+  full_join(us.cases) %>%
+  mutate(Date = mdy(sub("^X", "", Date)))
+
+head(us.data)
+
+summary(us.data)
+
+
+```
+
+```{r Add Population to Global Data set}
+
+# Find Population information and Import it in
+uid.lookup.url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+uid = read_csv(uid.lookup.url) %>%
+  select(-c(Lat, Long_, code3, iso2, iso3, Admin2))
+
+#Join new data information with exsisting global information
+global.pop = global %>%
+  left_join(uid, by = c("Province.State" = "Province_State", "Country.Region" = "Country_Region"))%>%
+  select(Province.State, Country.Region, Date, Cases, Deaths, Population, Combined_Key)
+
+head(global.pop)
+```
+
+## Data Cleaning and Preparation
+
+Before analyzing the data, I needed to clean and organize the datasets to make them easier to work with. The original data contained cumulative COVID-19 cases and deaths, so I first converted the data from wide format to long format.
+
+I then combined the cases and deaths datasets using their corresponding dates and locations. The United States data was grouped separately before combining it with the global data to prevent counting the same observations twice.
+
+Next, I used the countrycode package to assign each country to a continent. Some locations needed to be manually assigned, while others, such as cruise ships and Olympic events, were removed since they did not belong to a specific continent.
+
+Since the original data contained cumulative totals, I calculated the number of new cases and deaths by finding the difference between consecutive days. I then grouped the data by continent, week, and year to compare the changes over time.
+
+After cleaning the data, I was able to create visualizations and build a regression model to answer my research questions.
+
+```{r Fix missing Vaules}
+
+global %>%
+  filter(Country.Region == "Afghanistan") %>%
+  distinct(Province.State, Country.Region)
+
+uid %>%
+  filter(Country_Region == "Afghanistan") %>%
+  select(Province_State, Country_Region, Population)
+
+global = global %>%
+  mutate(Province.State = na_if(Province.State, ""))
+
+uid = uid %>%
+  mutate(Province_State = na_if(Province_State, ""))
+
+global.pop = global %>%
+  left_join(uid, by = c("Province.State" = "Province_State", "Country.Region" = "Country_Region")) %>%
+  select(Province.State, Country.Region, Date, Cases, Deaths, Population, Combined_Key)
+
+summary(global.pop)
+
+```
+
+```{r Total the Cases and Deaths by Country}
+# Total US cases and deaths by date
+us.totals = us.data %>%
+group_by(Country_Region, Date) %>%
+summarise(Cases = sum(Cases, na.rm = TRUE), Deaths = sum(Deaths, na.rm = TRUE), .groups = "drop") %>%
+arrange(Date)
+
+glimpse(us.totals)
+
+# rename column
+us.totals = us.totals %>%
+rename(Country.Region = Country_Region)
+
+unique(us.totals$Country.Region)
+
+unique(global$Country.Region)
+
+# Total global cases by country and date
+global.total = global %>%
+  filter(Country.Region != "US") %>%
+  group_by(Country.Region, Date) %>%
+  summarise(Cases = sum(Cases, na.rm = TRUE), Deaths = sum(Deaths, na.rm = TRUE), .groups = "drop") %>%
+  arrange(Date)
+
+unique(global.total$Country.Region)
+```
+
+```{r Combine global and US total datasets}
+# Combine global and US totals 
+world.data = bind_rows(us.totals, global.total) %>%
+  select(Country.Region, Date, Cases, Deaths) %>%
+  arrange(Country.Region, Date)
+
+unique(world.data$Country.Region)
+
+#Confirm there are not empty values
+world.data %>%
+  count(Country.Region, Date) %>%
+  filter(n > 1)
+
+
+```
+
+
+```{r Add in Continent Information}
+# Add in Continent Column
+world.data = world.data %>%
+  mutate(Continent = countrycode(Country.Region, "country.name", "continent"))
+
+# Check if any rows have empty Continent values
+world.data %>%
+  filter(is.na(Continent)) %>%
+  distinct(Country.Region)
+
+# (Had to look up on Google what each Value Was)
+# Remove Cruise Ships and Olympic information and assign Coninent to other two locations
+world.data = world.data %>%
+  filter(!Country.Region %in% c("MS Zaandam", "Summer Olympics 2020", "Winter Olympics 2022", "Diamond Princess")) %>%
+  mutate(Continent = case_when(Country.Region == "Kosovo" ~ "Europe", Country.Region == "Micronesia" ~ "Oceania", TRUE ~ Continent))
+
+# Confirmed it worked
+world.data %>%
+  filter(is.na(Continent)) %>%
+  distinct(Country.Region)
+
+glimpse(world.data)
+head(world.data)
+
+```
+
+```{r Calculate New Weekly Cases and Deaths}
+
+#Add in a new column for new Cases and Deaths per Week and Column for New.Cases
+world.data = world.data %>%
+  group_by(Country.Region) %>%
+  arrange(Date, .by_group = TRUE) %>%
+  mutate(New.Cases = Cases - lag(Cases)) %>%
+  mutate(New.Deaths = Deaths - lag(Deaths)) %>%
+  mutate(Week = floor_date(Date, unit = "week", week_start = getOption("lubridate.week.start", 7))) %>%
+  ungroup()
+
+head(world.data)
+
+#keep only weekly data
+weekly.data = world.data %>%
+  group_by(Continent, Week) %>%
+  summarise(New.Cases = sum(New.Cases, na.rm = TRUE), New.Deaths = sum(New.Deaths, na.rm = TRUE), .groups = "drop")
+
+head(weekly.data)
+
+```
+
+```{r Data Visual 1}
+ggplot(weekly.data, aes(x = Week, y = New.Cases, color = Continent)) +
+  geom_line(linewidth = .75) +
+  labs(x = "Timeline", y = "New Cases", title = "Timeline of New Cases per Continent")
+```
+
+```{r Data Visual 2}
+ggplot(weekly.data, aes(x = Week, y = New.Deaths, color = Continent)) +
+  geom_line(linewidth = .75) +
+  labs(x = "Timeline", y = "New Deaths", title = "Timeline of New Deaths per Continent")
+```
+## Visual 1&2
+The two graphs show the number of new COVID-19 cases and reported each week across the different continents. I wanted to see how the number of cases changed over time and whether the continents followed similar trends.
+
+From this graph, we can examine when cases and death increased or decreased and compare the different waves of COVID-19. However, since the graph uses the total number of reported cases, continents with larger populations may have higher numbers compared to smaller continents.
+
+```{r Create Annual Data Per Continent}
+annual.data = world.data %>%
+  mutate(Year = year(Date))
+
+head(annual.data)
+
+annual.data = annual.data %>%
+  group_by(Continent, Year) %>%
+  summarise(Annual.Cases = sum(New.Cases, na.rm = TRUE), Annual.Deaths = sum(New.Deaths, na.rm = TRUE),.groups = "drop")
+
+head(annual.data)
+
+```
+
+
+```{r Data Visual 3}
+
+ggplot(annual.data, aes(x = Continent, y = Annual.Cases, fill = factor(Year))) +
+  geom_col(position = "dodge") +
+  labs(x = "Continent", y = "Annual Cases", title = "Trend of New Cases per Year", fill = "Year")
+```
+
+```{r Data Visual 4}
+ggplot(annual.data, aes(x = Continent, y = Annual.Deaths, fill = factor(Year))) +
+  geom_col(position = "dodge") +
+  labs(x = "Continent", y = "Annual Deaths", title = "Trend of New Deaths per Year", fill = "Year")
+```
+
+## Data Visual 3 & 4
+For the third and fourth graph, I grouped the number of new COVID-19 cases and deaths by year and continent. This made it easier to compare the overall number of cases between years rather than looking at the weekly changes.
+
+The graph allows us to see which years had higher numbers of reported cases and deaths and how those totals differed across continents. However, it is important to remember that the continents have different population sizes, which can affect the overall number of reported cases.
+
+```{r Model and Model Data}
+weekly.data = weekly.data %>%
+  mutate(Year = factor(year(Week)))
+
+covid.mod = lm(New.Deaths ~ Continent*Year*New.Cases, data = weekly.data)
+
+summary(covid.mod)
+
+weekly.data$predicted = predict(covid.mod)
+
+ggplot(weekly.data, aes(x = Week)) +
+  geom_line(aes(y = New.Deaths, color = "Actual"), linewidth = 0.6) +
+  geom_line(aes(y = predicted, color = "Predicted"), linewidth = 0.6) +
+  facet_wrap(~ Continent, scales = "free_y") +
+  scale_color_manual(values = c("Actual" = "green","Predicted" = "purple")) +
+  labs(title = "Actual vs Predicted Weekly COVID-19 Deaths by Continent", x = "Timeline", y = "Weekly New Deaths", color = "Deaths")
+```
+
+## Potential Bias and Limitations
+
+There are several possible sources of bias in the data and my analysis that could affect the results.
+
+One major source of bias is the difference in COVID-19 testing and reporting between countries. Some countries had more access to testing and were able to report more cases, while others may have had limited testing. This means that the reported number of cases may not represent the actual number of infections. Another possible bias is population size. Since I compared the total number of cases and deaths across continents, continents with larger populations may naturally have higher totals. There could also be bias from missing or inaccurate data. Some countries may not have consistently reported their cases and deaths, and others may have changed their reporting methods throughout the pandemic. This could affect the accuracy of the weekly and yearly totals. Because of these limitations, the results should be interpreted carefully and should not be used to assume that the number of reported cases alone determines the number of deaths.
+
+## Conclusion
+
+For this project, I analyzed COVID-19 cases and deaths across continents and throughout the years using visualizations and a multiple linear regression model. This allowed me to compare trends and examine whether the number of new cases could help predict the number of deaths. Although the analysis helped identify patterns, differences in testing, reporting, and population sizes could affect the results. Overall, this project showed the importance of considering potential bias and limitations when analyzing real-world data.
+
